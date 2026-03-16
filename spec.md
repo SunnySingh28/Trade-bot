@@ -1,27 +1,3 @@
-<!-- # Event driven Algo Trading Engine
-Building a real-time, event-driven algorithmic trading platform.
-
-## High-Level Architecture
-- Market data is received via WebSocket
-- Data is processed by an ingestion service
-- All communication happens via Redis Pub-Sub
-- Time-series data is stored in Redis timeseries
-- Trading strategies consume market data and emit signals in an event driven manner
-- Grafana visualizes prices and signals, with redis as the source
-
-## Core Design Principles
-- Event-driven architecture
-- Loose coupling via Pub-Sub
-- Low latency and high throughput
-- Horizontal scalability
-- Fault tolerance
-
-## Technologies
-- Language: Python
-- Messaging: Redis pubsub
-- Storage: redis timeseries
-- Visualization: Grafana
-- Deployment: Docker compose -->
 
 # trade-bot
 
