@@ -34,6 +34,7 @@ logger = logging.getLogger("timeseries")
 
 
 PRICE_FIELDS = ("open", "high", "low", "close", "volume")
+INDICATOR_FIELDS = ("ema_fast", "ema_slow")
 
 
 def connect_redis(
@@ -73,12 +74,20 @@ def signal_stream(strategy_id: str) -> str:
     return f"signal:{strategy_id}"
 
 
+def indicator_stream(strategy_id: str) -> str:
+    return f"indicator:{strategy_id}"
+
+
 def price_ts_key(symbol: str, field: str) -> str:
     return f"price:{symbol}:{field}"
 
 
 def signal_ts_key(strategy_id: str, symbol: str) -> str:
     return f"signal:{strategy_id}:{symbol}"
+
+
+def indicator_ts_key(strategy_id: str, symbol: str, field: str) -> str:
+    return f"indicator:{strategy_id}:{symbol}:{field}"
 
 
 def signal_meta_key(strategy_id: str, symbol: str, timestamp_ms: int) -> str:
@@ -141,6 +150,17 @@ def ensure_series_keys(
                     "type": "signal",
                 },
             )
+            for field in INDICATOR_FIELDS:
+                ts_create_if_missing(
+                    r,
+                    indicator_ts_key(strategy_id, symbol, field),
+                    labels={
+                        "symbol": symbol,
+                        "strategy_id": strategy_id,
+                        "field": field,
+                        "type": "indicator",
+                    },
+                )
 
 
 def parse_price(fields: dict[str, str]) -> dict[str, Any]:
@@ -164,6 +184,17 @@ def parse_signal(fields: dict[str, str]) -> dict[str, Any]:
         "type": int(fields["type"]),
         "timestamp": int(fields["timestamp"]),
         "message": fields["message"],
+    }
+
+
+def parse_indicator(fields: dict[str, str]) -> dict[str, Any]:
+    """Parse an indicator stream message."""
+    return {
+        "symbol": fields["symbol"],
+        "strategy_id": fields["strategy_id"],
+        "timestamp": int(fields["timestamp"]),
+        "ema_fast": float(fields["ema_fast"]),
+        "ema_slow": float(fields["ema_slow"]),
     }
 
 
@@ -196,6 +227,20 @@ def write_signal(r: "redis.Redis", sig: dict[str, Any]) -> None:
     )
 
 
+def write_indicator(r: "redis.Redis", ind: dict[str, Any]) -> None:
+    """Write EMA values to per-field TimeSeries keys."""
+    symbol = ind["symbol"]
+    strategy_id = ind["strategy_id"]
+    ts_ms = int(ind["timestamp"]) * 1000
+    for field in INDICATOR_FIELDS:
+        r.execute_command(
+            "TS.ADD",
+            indicator_ts_key(strategy_id, symbol, field),
+            ts_ms,
+            ind[field],
+        )
+
+
 def process_message(r: "redis.Redis", stream_name: str, fields: dict[str, str]) -> bool:
     """Process one stream message.
 
@@ -213,6 +258,11 @@ def process_message(r: "redis.Redis", stream_name: str, fields: dict[str, str]) 
         if stream_name.startswith("signal:"):
             sig = parse_signal(fields)
             write_signal(r, sig)
+            return True
+
+        if stream_name.startswith("indicator:"):
+            ind = parse_indicator(fields)
+            write_indicator(r, ind)
             return True
 
         logger.warning("Unknown stream name=%s payload=%s", stream_name, fields)
@@ -244,6 +294,10 @@ def load_stream_cursors(
 
     for strategy_id in strategies:
         stream = signal_stream(strategy_id)
+        streams[stream] = r.get(cursor_key(stream)) or config.STREAM_START_ID
+
+    for strategy_id in strategies:
+        stream = indicator_stream(strategy_id)
         streams[stream] = r.get(cursor_key(stream)) or config.STREAM_START_ID
 
     return streams

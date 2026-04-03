@@ -28,8 +28,10 @@ INTERVAL: int = int(os.getenv("INTERVAL", "60"))  # seconds
 DATA_SOURCE: str = os.getenv("DATA_SOURCE", "binance")
 WS_URI: str = os.getenv(
     "WS_URI",
-    "wss://stream.binance.com:9443/ws",
+    "wss://stream.binance.com/ws",
 )
+BINANCE_KLINE_INTERVAL: str = os.getenv("BINANCE_KLINE_INTERVAL", "1s")
+WS_CONNECT_TIMEOUT: float = float(os.getenv("WS_CONNECT_TIMEOUT", "10"))
 
 # ── Operational ──────────────────────────────────────────────────────
 RECONNECT_DELAY: float = float(os.getenv("RECONNECT_DELAY", "2"))

@@ -4,10 +4,10 @@ Lifecycle
 ---------
 1. Read configuration from environment variables.
 2. Connect to Redis with exponential-backoff retry.
-3. Open a websocket to the Binance Kline stream.
+3. Open a stable WebSocketApp to the Binance 1s Kline stream.
 4. For each incoming tick, parse the completed kline;
    when a candle is completed, XADD it to ``price:{symbol}``.
-5. On websocket drop, log and reconnect.
+5. Handle heartbeats (ping/pong) to prevent silent connection drops.
 6. Shut down cleanly on SIGINT / SIGTERM.
 """
 
@@ -33,6 +33,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ingestor")
 
+# Global reference for the Redis client to be used in callbacks
+redis_client: redis.Redis | None = None
 
 # ── Redis connection with retry ──────────────────────────────────────
 def connect_redis(
@@ -76,15 +78,8 @@ def publish_candle(r: redis.Redis, candle: Dict[str, Any]) -> None:
 # ── Websocket tick parsing ───────────────────────────────────────────
 def parse_binance_kline(raw: str) -> Dict[str, Any] | None:
     """Parse a Binance kline stream message into a completed candle dict.
-
-    Expected JSON (Binance ``@kline_<interval>`` stream)::
-
-        {"e":"kline", "E":1718000005123, "s":"BTCUSDT",
-         "k": {"t":1718000005000, "o":"42850.25", "c":"42855.00", 
-               "h":"42860.00", "l":"42840.00", "v":"1.5", "n": 15, "x": true, ...}}
-
-    Returns ``{"symbol": str, "timestamp": int, "open": float, ...}``
-    ONLY if the kline is fully closed ("x": true). Otherwise, returns None.
+    
+    Returns OHLCV only if the kline is fully closed ("x": true).
     """
     try:
         msg = json.loads(raw)
@@ -96,13 +91,12 @@ def parse_binance_kline(raw: str) -> Dict[str, Any] | None:
 
     kline = msg.get("k", {})
 
-    # We only want to publish the candle downstream when it is fully closed
     if not kline.get("x"):
         return None
 
     return {
         "symbol": msg.get("s"),
-        "timestamp": int(kline.get("t", 0)) // 1000,  # ms → seconds (matches previous format)
+        "timestamp": int(kline.get("t", 0)) // 1000,  # ms → seconds
         "open": float(kline.get("o", 0.0)),
         "high": float(kline.get("h", 0.0)),
         "low": float(kline.get("l", 0.0)),
@@ -112,63 +106,66 @@ def parse_binance_kline(raw: str) -> Dict[str, Any] | None:
     }
 
 
+# ── Websocket Callbacks ──────────────────────────────────────────────
+def on_message(ws, message):
+    """Triggered whenever data is received from the socket."""
+    candle = parse_binance_kline(message)
+    if candle and redis_client:
+        publish_candle(redis_client, candle)
+        logger.info(
+            "Candle Published  %s  ts=%s  C=%.2f  V=%.2f",
+            candle["symbol"],
+            candle["timestamp"],
+            candle["close"],
+            candle["volume"]
+        )
+
+def on_error(ws, error):
+    logger.error("Websocket Error: %s", error)
+
+def on_close(ws, close_status_code, close_msg):
+    logger.warning("Websocket Closed: %s - %s", close_status_code, close_msg)
+
+def on_open(ws):
+    """Triggered when the handshake is successful."""
+    logger.info(
+        "Websocket Connection Established! Streaming %s Klines...",
+        config.BINANCE_KLINE_INTERVAL,
+    )
+
+
 # ── Websocket lifecycle ─────────────────────────────────────────────
 def build_ws_url(symbol: str, base_uri: str, interval: str = "1s") -> str:
     """Build the full websocket URL for a Binance kline stream."""
     return f"{base_uri}/{symbol.lower()}@kline_{interval}"
 
 
-def run_ingestor(
-    r: redis.Redis,
-    symbol: str,
-    source: str,
-    interval: int,
-    ws_uri: str,
-) -> None:
-    """Run the main ingest loop for a single symbol (blocking)."""
-    # Binance supports '1s' klines directly, bypassing the need for a local CandleBuilder
-    url = build_ws_url(symbol, ws_uri, interval="1s")
+def run_ingestor_v2(symbol: str, ws_uri: str, interval: str) -> None:
+    """Run the main ingest loop using WebSocketApp for heartbeats."""
+    url = build_ws_url(symbol, ws_uri, interval=interval)
+    logger.info("Connecting websocket url=%s", url)
+    
+    # Enable internal trace for deep debugging if needed
+    # websocket.enableTrace(False) 
 
-    while True:
-        try:
-            logger.info("Connecting to websocket: %s", url)
-            ws = websocket.create_connection(url, timeout=30)
-            logger.info("Websocket connected for %s", symbol)
+    # Prevent hanging forever when a host/port is unreachable.
+    websocket.setdefaulttimeout(config.WS_CONNECT_TIMEOUT)
 
-            while True:
-                raw = ws.recv()
-                candle = parse_binance_kline(raw)
-                
-                # Only publishes when a 1s candle has successfully closed
-                if candle is not None:
-                    publish_candle(r, candle)
-                    logger.info(
-                        "Candle emitted  %s  ts=%s  O=%.5f H=%.5f L=%.5f C=%.5f V=%.2f  ticks=%d",
-                        candle["symbol"],
-                        candle["timestamp"],
-                        candle["open"],
-                        candle["high"],
-                        candle["low"],
-                        candle["close"],
-                        candle["volume"],
-                        candle["tick_count"],
-                    )
+    ws = websocket.WebSocketApp(
+        url,
+        on_open=on_open,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close
+    )
 
-        except (
-            websocket.WebSocketException,
-            ConnectionError,
-            OSError,
-        ) as exc:
-            logger.warning("Websocket error for %s: %s — reconnecting …", symbol, exc)
-            time.sleep(config.RECONNECT_DELAY)
-        except Exception:
-            logger.exception("Unexpected error in ingest loop for %s", symbol)
-            time.sleep(config.RECONNECT_DELAY)
+    # run_forever handles the connection and reconnection logic.
+    # ping_interval ensures we send a keep-alive every 30s.
+    ws.run_forever(ping_interval=30, ping_timeout=10)
 
 
 # ── Graceful shutdown ────────────────────────────────────────────────
 _shutdown = False
-
 
 def _handle_signal(signum: int, _frame: Any) -> None:
     global _shutdown
@@ -179,31 +176,33 @@ def _handle_signal(signum: int, _frame: Any) -> None:
 
 # ── Main ─────────────────────────────────────────────────────────────
 def main() -> None:
+    global redis_client
+    
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
     logger.info(
-        "Ingestor starting — symbols=%s  source=%s",
+        "Ingestor starting — symbols=%s  source=%s ws_uri=%s interval=%s",
         config.SYMBOLS,
         config.DATA_SOURCE,
+        config.WS_URI,
+        config.BINANCE_KLINE_INTERVAL,
     )
 
-    r = connect_redis()
+    # 1. Initialize Redis
+    redis_client = connect_redis()
 
+    symbol = config.SYMBOLS[0]
     if len(config.SYMBOLS) != 1:
-        logger.warning(
-            "v1 supports a single symbol per ingestor instance. "
-            "Using the first symbol: %s",
-            config.SYMBOLS[0],
-        )
+        logger.warning("v1 supports single symbol. Using: %s", symbol)
 
-    run_ingestor(
-        r,
-        symbol=config.SYMBOLS[0],
-        source=config.DATA_SOURCE,
-        interval=config.INTERVAL,
-        ws_uri=config.WS_URI,  # e.g., wss://stream.binance.com:9443/ws
-    )
+    # 2. Start WebSocket Loop
+    while not _shutdown:
+        try:
+            run_ingestor_v2(symbol, config.WS_URI, config.BINANCE_KLINE_INTERVAL)
+        except Exception:
+            logger.exception("Unexpected error in ingest loop. Reconnecting in 5s...")
+            time.sleep(5)
 
 
 if __name__ == "__main__":

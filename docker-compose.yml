@@ -20,7 +20,9 @@ services:
       SYMBOLS: BTCUSDT
       INTERVAL: 60
       DATA_SOURCE: binance
-      WS_URI: wss://stream.binance.com:9443/ws
+      WS_URI: wss://stream.binance.com/ws
+      BINANCE_KLINE_INTERVAL: 1s
+      WS_CONNECT_TIMEOUT: 10
       LOG_LEVEL: INFO
 
   strategy:

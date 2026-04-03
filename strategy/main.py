@@ -85,6 +85,41 @@ def dedup_should_suppress(history: deque[int], signal_type: int, window: int) ->
     return all(prev == signal_type for prev in history)
 
 
+def indicator_stream(strategy_id: str) -> str:
+    return f"indicator:{strategy_id}"
+
+
+def publish_indicator_snapshot(
+    r: "redis.Redis",
+    strategy_id: str,
+    symbol: str,
+    timestamp: int,
+    inds: dict[str, Any],
+) -> None:
+    """Publish EMA snapshot for chart overlays.
+
+    Emits one message per closed candle once indicators are ready.
+    """
+    ema_fast = inds.get("ema_fast")
+    ema_slow = inds.get("ema_slow")
+    if ema_fast is None or ema_slow is None:
+        return
+
+    fast_val = ema_fast.value()
+    slow_val = ema_slow.value()
+    if fast_val is None or slow_val is None:
+        return
+
+    payload = {
+        "symbol": symbol,
+        "strategy_id": strategy_id,
+        "timestamp": timestamp,
+        "ema_fast": round(float(fast_val), 8),
+        "ema_slow": round(float(slow_val), 8),
+    }
+    r.xadd(indicator_stream(strategy_id), {k: str(v) for k, v in payload.items()})
+
+
 def _cursor_key(stream_name: str) -> str:
     return f"{config.CURSOR_KEY_PREFIX}:{stream_name}"
 
@@ -172,6 +207,23 @@ def main() -> None:
                     # Warm-up gate
                     if len(candles) < candles.maxlen:
                         continue
+
+                    try:
+                        publish_indicator_snapshot(
+                            r,
+                            strategy_id=strategy_id,
+                            symbol=symbol,
+                            timestamp=int(candle["timestamp"]),
+                            inds=inds,
+                        )
+                    except redis.exceptions.RedisError:
+                        logger.error(
+                            "Failed to publish indicator snapshot strategy=%s symbol=%s ts=%s",
+                            strategy_id,
+                            symbol,
+                            candle["timestamp"],
+                            exc_info=True,
+                        )
 
                     signal_payload = strategy.evaluate(candles, inds)
                     if signal_payload is None:

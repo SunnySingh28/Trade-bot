@@ -326,7 +326,9 @@ Grafana instance using the **Redis Data Source** plugin (`redis-datasource`) poi
 
 #### Plugin provisioning
 
-The plugin is installed automatically via the `GF_INSTALL_PLUGINS` environment variable in docker-compose. The datasource is provisioned at startup via a YAML file in `grafana/provisioning/datasources/`.
+The datasource is provisioned at startup via a YAML file in `grafana/provisioning/datasources/`.
+
+The current compose file does not set `GF_INSTALL_PLUGINS`. If the Redis datasource plugin is needed, install it explicitly in the Grafana image or use provisioning for a bundled datasource.
 
 ```yaml
 # grafana/provisioning/datasources/redis.yaml
@@ -379,7 +381,7 @@ All services run via a single `docker-compose.yml` at the repository root.
 #### Services
 
 - `redis` — `redis/redis-stack` image (includes RedisTimeSeries). Exposes port 6379 internally. Mounts a named volume for persistence.
-- `grafana` — official Grafana image. Mounts `grafana/provisioning/` for datasource and dashboard config. Installs `redis-datasource` plugin on startup.
+- `grafana` — official Grafana image. Mounts `grafana/provisioning/` for datasource and dashboard config.
 - `ingestor` — Python service. Built from `./ingestor/Dockerfile`. Depends on `redis`.
 - `strategy` — Python service. Built from `./strategy/Dockerfile`. Depends on `redis`.
 - `tsdb-writer` — Python service. Built from `./tsdb-writer/Dockerfile`. Depends on `redis`.
