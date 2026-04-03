@@ -11,11 +11,7 @@ import signal
 import sys
 import time
 from typing import Any
-
-try:
-    import redis
-except ModuleNotFoundError:  # pragma: no cover - allows helper tests without deps
-    redis = None  # type: ignore[assignment]
+import redis
 
 if redis is None:  # pragma: no cover
     REDIS_CONNECTION_ERROR = ConnectionError

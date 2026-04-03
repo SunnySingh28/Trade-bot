@@ -4,8 +4,8 @@ Lifecycle
 ---------
 1. Read configuration from environment variables.
 2. Connect to Redis with exponential-backoff retry.
-3. Open a websocket to the data source.
-4. For each incoming tick, feed it to the CandleBuilder;
+3. Open a websocket to the Binance Kline stream.
+4. For each incoming tick, parse the completed kline;
    when a candle is completed, XADD it to ``price:{symbol}``.
 5. On websocket drop, log and reconnect.
 6. Shut down cleanly on SIGINT / SIGTERM.
@@ -23,7 +23,6 @@ from typing import Any, Dict
 import redis
 import websocket
 
-from candle_builder import CandleBuilder
 import config
 
 # ── Logging ──────────────────────────────────────────────────────────
@@ -75,36 +74,48 @@ def publish_candle(r: redis.Redis, candle: Dict[str, Any]) -> None:
 
 
 # ── Websocket tick parsing ───────────────────────────────────────────
-def parse_binance_trade(raw: str) -> Dict[str, Any] | None:
-    """Parse a Binance trade stream message into a tick dict.
+def parse_binance_kline(raw: str) -> Dict[str, Any] | None:
+    """Parse a Binance kline stream message into a completed candle dict.
 
-    Expected JSON (Binance ``@trade`` stream)::
+    Expected JSON (Binance ``@kline_<interval>`` stream)::
 
-        {"e":"trade","E":1718000005123,"s":"BTCUSDT",
-         "p":"42850.25","q":"0.0012","T":1718000005100, ...}
+        {"e":"kline", "E":1718000005123, "s":"BTCUSDT",
+         "k": {"t":1718000005000, "o":"42850.25", "c":"42855.00", 
+               "h":"42860.00", "l":"42840.00", "v":"1.5", "n": 15, "x": true, ...}}
 
-    Returns ``{"price": float, "volume": float, "timestamp": int}``
-    or ``None`` if the message is not a trade event.
+    Returns ``{"symbol": str, "timestamp": int, "open": float, ...}``
+    ONLY if the kline is fully closed ("x": true). Otherwise, returns None.
     """
     try:
         msg = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         return None
 
-    if msg.get("e") != "trade":
+    if msg.get("e") != "kline":
+        return None
+
+    kline = msg.get("k", {})
+
+    # We only want to publish the candle downstream when it is fully closed
+    if not kline.get("x"):
         return None
 
     return {
-        "price": float(msg["p"]),
-        "volume": float(msg["q"]),
-        "timestamp": int(msg["T"]) // 1000,  # ms → seconds
+        "symbol": msg.get("s"),
+        "timestamp": int(kline.get("t", 0)) // 1000,  # ms → seconds (matches previous format)
+        "open": float(kline.get("o", 0.0)),
+        "high": float(kline.get("h", 0.0)),
+        "low": float(kline.get("l", 0.0)),
+        "close": float(kline.get("c", 0.0)),
+        "volume": float(kline.get("v", 0.0)),
+        "tick_count": int(kline.get("n", 0)),
     }
 
 
 # ── Websocket lifecycle ─────────────────────────────────────────────
-def build_ws_url(symbol: str, base_uri: str) -> str:
-    """Build the full websocket URL for a Binance trade stream."""
-    return f"{base_uri}/{symbol.lower()}@trade"
+def build_ws_url(symbol: str, base_uri: str, interval: str = "1s") -> str:
+    """Build the full websocket URL for a Binance kline stream."""
+    return f"{base_uri}/{symbol.lower()}@kline_{interval}"
 
 
 def run_ingestor(
@@ -115,8 +126,8 @@ def run_ingestor(
     ws_uri: str,
 ) -> None:
     """Run the main ingest loop for a single symbol (blocking)."""
-    builder = CandleBuilder(symbol, source, interval)
-    url = build_ws_url(symbol, ws_uri)
+    # Binance supports '1s' klines directly, bypassing the need for a local CandleBuilder
+    url = build_ws_url(symbol, ws_uri, interval="1s")
 
     while True:
         try:
@@ -126,16 +137,14 @@ def run_ingestor(
 
             while True:
                 raw = ws.recv()
-                tick = parse_binance_trade(raw)
-                if tick is None:
-                    continue
-
-                candle = builder.process_tick(tick)
+                candle = parse_binance_kline(raw)
+                
+                # Only publishes when a 1s candle has successfully closed
                 if candle is not None:
                     publish_candle(r, candle)
                     logger.info(
                         "Candle emitted  %s  ts=%s  O=%.5f H=%.5f L=%.5f C=%.5f V=%.2f  ticks=%d",
-                        symbol,
+                        candle["symbol"],
                         candle["timestamp"],
                         candle["open"],
                         candle["high"],
@@ -174,16 +183,13 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_signal)
 
     logger.info(
-        "Ingestor starting — symbols=%s  interval=%ds  source=%s",
+        "Ingestor starting — symbols=%s  source=%s",
         config.SYMBOLS,
-        config.INTERVAL,
         config.DATA_SOURCE,
     )
 
     r = connect_redis()
 
-    # For v1 we run a single symbol in-process.
-    # Multi-symbol support can be added via threading/asyncio later.
     if len(config.SYMBOLS) != 1:
         logger.warning(
             "v1 supports a single symbol per ingestor instance. "
@@ -196,7 +202,7 @@ def main() -> None:
         symbol=config.SYMBOLS[0],
         source=config.DATA_SOURCE,
         interval=config.INTERVAL,
-        ws_uri=config.WS_URI,
+        ws_uri=config.WS_URI,  # e.g., wss://stream.binance.com:9443/ws
     )
 
 

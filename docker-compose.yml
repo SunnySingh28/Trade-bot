@@ -1,0 +1,96 @@
+services:
+  redis:
+    image: redis/redis-stack:latest
+    container_name: engine-redis
+    ports:
+      - "6379:6379"
+      - "8001:8001"
+    volumes:
+      - redis_data:/data
+
+  ingestor:
+    build:
+      context: ./ingestor
+    container_name: engine-ingestor
+    depends_on:
+      - redis
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SYMBOLS: BTCUSDT
+      INTERVAL: 60
+      DATA_SOURCE: binance
+      WS_URI: wss://stream.binance.com:9443/ws
+      LOG_LEVEL: INFO
+
+  strategy:
+    build:
+      context: ./strategy
+    container_name: engine-strategy
+    depends_on:
+      - redis
+      - ingestor
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SYMBOLS: BTCUSDT
+      STRATEGY_MODULE: ema_crossover
+      STREAM_START_ID: $$
+      LOG_LEVEL: INFO
+
+  timeseries:
+    build:
+      context: ./timeseries
+    container_name: engine-timeseries
+    depends_on:
+      - redis
+      - strategy
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SYMBOLS: BTCUSDT
+      STRATEGIES: ema_crossover
+      STREAM_START_ID: $$
+      LOG_LEVEL: INFO
+
+  alerts:
+    build:
+      context: ./alerts
+    container_name: engine-alerts
+    depends_on:
+      - redis
+      - strategy
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      STRATEGIES: ema_crossover
+      SYMBOLS: BTCUSDT
+      STREAM_START_ID: $$
+      ALERT_CHANNEL: default
+      DEDUP_WINDOW: 1
+      LOG_LEVEL: INFO
+
+  pubsub:
+    build:
+      context: ./pubsub
+    container_name: engine-pubsub
+    profiles:
+      - optional
+
+  grafana:
+    image: grafana/grafana
+    container_name: engine-grafana
+    depends_on:
+      - redis
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_INSTALL_PLUGINS: redis-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  redis_data:
+  grafana_data:
