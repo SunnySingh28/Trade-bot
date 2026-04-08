@@ -109,6 +109,7 @@
           "command": "ts.range",
           "fill": false,
           "keyName": "price:BTCUSDT:close",
+          "legend": "close",
           "query": "",
           "refId": "A",
           "type": "timeSeries"
@@ -122,6 +123,7 @@
             "uid": "afhzymtbyu1a8d"
           },
           "keyName": "indicator:ema_crossover:BTCUSDT:ema_fast",
+          "legend": "fast ema: 50 period",
           "query": "",
           "refId": "B",
           "type": "timeSeries"
@@ -135,6 +137,7 @@
             "uid": "afhzymtbyu1a8d"
           },
           "keyName": "indicator:ema_crossover:BTCUSDT:ema_slow",
+          "legend": "slow ema: 20 period",
           "query": "",
           "refId": "C",
           "type": "timeSeries"
@@ -210,7 +213,7 @@
         "x": 12,
         "y": 0
       },
-      "id": 1,
+      "id": 4,
       "options": {
         "legend": {
           "calcs": [],
@@ -228,17 +231,38 @@
       "targets": [
         {
           "command": "ts.range",
+          "keyName": "price:BTCUSDT:close",
+          "legend": "close",
+          "query": "",
+          "refId": "A",
+          "type": "timeSeries"
+        },
+        {
+          "command": "ts.range",
           "datasource": {
             "type": "redis-datasource",
             "uid": "afhzymtbyu1a8d"
           },
           "keyName": "price:BTCUSDT:high",
+          "legend": "high",
           "query": "",
-          "refId": "A",
+          "refId": "B",
+          "type": "timeSeries"
+        },
+        {
+          "command": "ts.range",
+          "datasource": {
+            "type": "redis-datasource",
+            "uid": "afhzymtbyu1a8d"
+          },
+          "keyName": "price:BTCUSDT:low",
+          "legend": "low",
+          "query": "",
+          "refId": "C",
           "type": "timeSeries"
         }
       ],
-      "title": "high",
+      "title": "high vs close",
       "type": "timeseries"
     },
     {
@@ -334,6 +358,104 @@
       ],
       "title": "close",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "redis-datasource",
+        "uid": "afhzymtbyu1a8d"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "command": "ts.range",
+          "datasource": {
+            "type": "redis-datasource",
+            "uid": "afhzymtbyu1a8d"
+          },
+          "keyName": "price:BTCUSDT:high",
+          "query": "",
+          "refId": "A",
+          "type": "timeSeries"
+        }
+      ],
+      "title": "high",
+      "type": "timeseries"
     }
   ],
   "preload": false,
@@ -348,8 +470,8 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "New dashboard",
+  "title": "indicator & prices",
   "uid": "ad8r6qm",
-  "version": 5,
+  "version": 8,
   "weekStart": ""
 }
