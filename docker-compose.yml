@@ -2,18 +2,24 @@ services:
   redis:
     image: redis/redis-stack:latest
     container_name: engine-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     ports:
-      - "6379:6379"
-      - "8001:8001"
-    volumes:
-      - redis_data:/data
+      - "${REDIS_PORT:-6379}:6379"
+      - "${REDIS_UI_PORT:-8001}:8001"
 
   ingestor:
     build:
       context: ./ingestor
     container_name: engine-ingestor
+    restart: unless-stopped
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -30,8 +36,10 @@ services:
       context: ./strategy
     container_name: engine-strategy
     depends_on:
-      - redis
-      - ingestor
+      ingestor:
+        condition: service_started
+      redis:
+        condition: service_healthy
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -45,23 +53,27 @@ services:
       context: ./timeseries
     container_name: engine-timeseries
     depends_on:
-      - redis
-      - strategy
+      strategy:
+        condition: service_started
+      redis:
+        condition: service_healthy
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       SYMBOLS: BTCUSDT
       STRATEGIES: ema_crossover
       STREAM_START_ID: $$
-      LOG_LEVEL: INFO
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
   alerts:
     build:
       context: ./alerts
     container_name: engine-alerts
     depends_on:
-      - redis
-      - strategy
+      strategy:
+        condition: service_started
+      redis:
+        condition: service_healthy
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -83,7 +95,8 @@ services:
     image: grafana/grafana
     container_name: engine-grafana
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     ports:
       - "3000:3000"
     environment:
@@ -94,5 +107,4 @@ services:
       - grafana_data:/var/lib/grafana
 
 volumes:
-  redis_data:
   grafana_data:
